@@ -2,7 +2,7 @@
 title: Estimador de Viralidad - TribeV2 Backend
 emoji: 🧠
 colorFrom: purple
-colorTo: cyan
+colorTo: blue
 sdk: gradio
 sdk_version: "5"
 app_file: app.py
