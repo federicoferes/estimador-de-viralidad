@@ -10,7 +10,7 @@ export async function analyzeVideo(
 ): Promise<ViralityResult> {
   const t0 = Date.now();
 
-  // Upload file to Gradio Space
+  // Step 1: Upload file to Gradio Space
   const uploadForm = new FormData();
   uploadForm.append("files", file, file.name);
   const uploadRes = await fetch(`${SPACE_URL}/gradio_api/upload`, {
@@ -24,36 +24,36 @@ export async function analyzeVideo(
   const uploadData: string[] = await uploadRes.json();
   const serverPath = uploadData[0];
 
-  // Call predict — may return a synchronous result or a queue event_id
-  const predictRes = await fetch(`${SPACE_URL}/gradio_api/predict`, {
+  // Step 2: Join Gradio 5 queue (async queue approach — no timeout)
+  const sessionHash = crypto.randomUUID().slice(0, 8);
+  const joinRes = await fetch(`${SPACE_URL}/gradio_api/queue/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      fn_index: 0,
       data: [
         {
           video: { path: serverPath, meta: { _type: "gradio.FileData" } },
           subtitles: null,
         },
       ],
+      session_hash: sessionHash,
+      trigger_id: null,
+      event_data: null,
     }),
     signal,
   });
-  if (!predictRes.ok) {
-    throw new Error(`Error en el análisis TribeV2 (${predictRes.status})`);
+  if (!joinRes.ok) {
+    throw new Error(`Error al iniciar el análisis (${joinRes.status})`);
   }
-  const json = await predictRes.json();
+  const { event_id } = await joinRes.json() as { event_id: string };
 
-  let scores: Record<string, string>;
-  if (json.event_id) {
-    scores = await pollQueue(json.event_id, signal);
-  } else {
-    scores = json?.data?.[0]?.value ?? json?.data?.[0] ?? {};
-  }
-
+  // Step 3: Stream SSE events until process_completed
+  const scores = await awaitQueueResult(event_id, signal);
   return mapScores(scores, Date.now() - t0);
 }
 
-async function pollQueue(
+function awaitQueueResult(
   eventId: string,
   signal: AbortSignal
 ): Promise<Record<string, string>> {
@@ -62,30 +62,36 @@ async function pollQueue(
       `${SPACE_URL}/gradio_api/queue/data?event_id=${eventId}`
     );
 
-    signal.addEventListener("abort", () => {
-      es.close();
-      reject(new DOMException("Aborted", "AbortError"));
-    });
+    const done = (fn: () => void) => { es.close(); fn(); };
+
+    signal.addEventListener("abort", () =>
+      done(() => reject(new DOMException("Aborted", "AbortError")))
+    );
 
     es.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.msg === "process_completed") {
-          es.close();
-          resolve(data.output?.data?.[0]?.value ?? data.output?.data?.[0] ?? {});
-        } else if (data.msg === "queue_full" || data.msg === "process_errored") {
-          es.close();
-          reject(new Error("El Space no pudo procesar el video. Reintentá en unos segundos."));
-        }
-      } catch {
-        // ignore JSON parse errors from SSE
+      let data: Record<string, unknown>;
+      try { data = JSON.parse(e.data); } catch { return; }
+
+      const msg = data.msg as string | undefined;
+
+      if (msg === "process_completed") {
+        const output = data.output as { data?: unknown[] } | undefined;
+        const raw = output?.data?.[0];
+        const scores: Record<string, string> =
+          (raw as { value?: Record<string, string> })?.value ??
+          (raw as Record<string, string>) ??
+          {};
+        done(() => resolve(scores));
+      } else if (msg === "queue_full") {
+        done(() => reject(new Error("El Space está ocupado. Reintentá en unos segundos.")));
+      } else if (msg === "process_errored") {
+        const detail = (data.output as { error?: string } | undefined)?.error;
+        done(() => reject(new Error(detail ?? "Error procesando el video en TribeV2.")));
       }
     };
 
-    es.onerror = () => {
-      es.close();
-      reject(new Error("Conexión con el Space interrumpida."));
-    };
+    es.onerror = () =>
+      done(() => reject(new Error("Conexión con el Space interrumpida.")));
   });
 }
 
