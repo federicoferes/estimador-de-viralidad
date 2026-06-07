@@ -67,43 +67,13 @@ def analyze_video(video_path: str) -> dict:
 # ── Gradio UI ──────────────────────────────────────────────────────────────
 
 def gradio_fn(video_input) -> dict:
-    print(f"[INFO] gradio_fn called. type={type(video_input).__name__} val={str(video_input)[:120]}", flush=True)
-    try:
-        # gr.File passes FileData dict; extract path
-        if isinstance(video_input, dict):
-            video_path = str(video_input.get("path") or video_input.get("url") or "")
-        elif hasattr(video_input, "path"):
-            video_path = str(video_input.path)
-        else:
-            video_path = str(video_input) if video_input is not None else ""
-
-        if not video_path:
-            return {"error": "No se recibió ruta de video", "type": "ValueError"}
-
-        print(f"[INFO] Analyzing: {video_path}", flush=True)
-        scores = analyze_video(video_path)
-        overall = round(
-            0.35 * scores["reward"] * 100
-            + 0.25 * scores["visual"] * 100
-            + 0.20 * scores["audio"] * 100
-            + 0.20 * scores["language"] * 100
-        )
-        print(f"[INFO] Done. overall={overall}", flush=True)
-        return {
-            "Viralidad Global":       f"{overall}/100",
-            "Impacto Visual":         f"{round(scores['visual']*100)}/100",
-            "Enganche Auditivo":      f"{round(scores['audio']*100)}/100",
-            "Narrativa / Lenguaje":   f"{round(scores['language']*100)}/100",
-            "Recompensa Emocional":   f"{round(scores['reward']*100)}/100",
-        }
-    except BaseException as exc:
-        tb = traceback.format_exc()
-        print(f"[ERROR] gradio_fn caught {type(exc).__name__}:\n{tb}", flush=True)
-        return {
-            "error":    str(exc) or f"<{type(exc).__name__}: sin mensaje>",
-            "type":     type(exc).__name__,
-            "details":  tb[-600:],
-        }
+    # DIAGNOSTIC: return immediately to test if function is reached at all
+    print(f"[DIAG] gradio_fn called. type={type(video_input).__name__}", flush=True)
+    return {
+        "debug":    True,
+        "type":     type(video_input).__name__,
+        "received": str(video_input)[:300],
+    }
 
 
 demo = gr.Interface(
