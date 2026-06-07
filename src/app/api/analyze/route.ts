@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ViralityResult } from "@/types/analysis";
 
+export const maxDuration = 120; // Vercel Pro allows up to 300s; hobby capped at 60s
+
 const HF_SPACE_URL = process.env.HF_SPACE_URL ?? "";
+const TIMEOUT_MS = 110_000;
 
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
@@ -11,41 +14,58 @@ export async function POST(req: NextRequest) {
   if (!HF_SPACE_URL) return NextResponse.json(buildDemoResult(), { status: 200 });
 
   const start = Date.now();
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
 
-  // Step 1: upload file to Gradio Space
-  const uploadForm = new FormData();
-  uploadForm.append("files", file, file.name);
-  const uploadRes = await fetch(`${HF_SPACE_URL}/gradio_api/upload`, {
-    method: "POST",
-    body: uploadForm,
-  });
-  if (!uploadRes.ok) {
-    const t = await uploadRes.text();
-    console.error("[analyze] upload failed:", t);
-    return NextResponse.json({ error: `Upload error: ${t}` }, { status: 502 });
+  try {
+    // Step 1: upload file to Gradio Space
+    const uploadForm = new FormData();
+    uploadForm.append("files", file, file.name);
+    const uploadRes = await fetch(`${HF_SPACE_URL}/gradio_api/upload`, {
+      method: "POST",
+      body: uploadForm,
+      signal: abort.signal,
+    });
+    if (!uploadRes.ok) {
+      const t = await uploadRes.text();
+      console.error("[analyze] upload failed:", t);
+      return NextResponse.json({ error: `Error al subir el video: ${t}` }, { status: 502 });
+    }
+    const [serverPath]: string[] = await uploadRes.json();
+
+    // Step 2: call Gradio predict with the uploaded file reference
+    const predictRes = await fetch(`${HF_SPACE_URL}/gradio_api/predict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: abort.signal,
+      body: JSON.stringify({
+        data: [{ video: { path: serverPath, meta: { _type: "gradio.FileData" } }, subtitles: null }],
+      }),
+    });
+    if (!predictRes.ok) {
+      const t = await predictRes.text();
+      console.error("[analyze] predict failed:", t);
+      return NextResponse.json({ error: `Error en el análisis TribeV2: ${t}` }, { status: 502 });
+    }
+
+    const json = await predictRes.json();
+    // Gradio returns: { data: [{ type: "value", value: {...scores} }] }
+    const scores: Record<string, string> = json?.data?.[0]?.value ?? json?.data?.[0] ?? {};
+    const elapsed = Date.now() - start;
+    return NextResponse.json(mapGradioResult(scores, elapsed));
+
+  } catch (err) {
+    const isTimeout = err instanceof Error && err.name === "AbortError";
+    console.error("[analyze] error:", err);
+    return NextResponse.json(
+      { error: isTimeout
+          ? "El análisis tardó demasiado. El Space puede estar iniciando — esperá 30 segundos y reintentá."
+          : `Error inesperado: ${String(err)}` },
+      { status: isTimeout ? 504 : 500 }
+    );
+  } finally {
+    clearTimeout(timer);
   }
-  const [serverPath]: string[] = await uploadRes.json();
-
-  // Step 2: call Gradio predict with the uploaded file reference
-  const predictRes = await fetch(`${HF_SPACE_URL}/gradio_api/predict`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      data: [{ video: { path: serverPath, meta: { _type: "gradio.FileData" } }, subtitles: null }],
-    }),
-  });
-  if (!predictRes.ok) {
-    const t = await predictRes.text();
-    console.error("[analyze] predict failed:", t);
-    return NextResponse.json({ error: `Predict error: ${t}` }, { status: 502 });
-  }
-
-  const json = await predictRes.json();
-  // Gradio returns: { data: [{ type: "value", value: {...scores} }] }
-  const scores: Record<string, string> = json?.data?.[0]?.value ?? json?.data?.[0] ?? {};
-  const elapsed = Date.now() - start;
-
-  return NextResponse.json(mapGradioResult(scores, elapsed));
 }
 
 function mapGradioResult(scores: Record<string, string>, elapsed: number): ViralityResult {

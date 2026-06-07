@@ -16,13 +16,18 @@ export default function Home() {
   const handleAnalyze = async (file: File) => {
     setState("loading");
     setErrorMsg(null);
-    const form = new FormData();
-    form.append("video", file);
-    const res = await fetch("/api/analyze", { method: "POST", body: form });
-    const data = await res.json();
-    if (!res.ok) { setState("error"); setErrorMsg(data.error ?? "Error desconocido."); return; }
-    setResult(data);
-    setState("result");
+    try {
+      const form = new FormData();
+      form.append("video", file);
+      const res = await fetch("/api/analyze", { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) { setState("error"); setErrorMsg(data.error ?? "Error desconocido."); return; }
+      setResult(data);
+      setState("result");
+    } catch {
+      setState("error");
+      setErrorMsg("Error de red. Verificá tu conexión e intentá de nuevo.");
+    }
   };
 
   const reset = () => { setState("idle"); setResult(null); setErrorMsg(null); };
@@ -93,13 +98,19 @@ export default function Home() {
               <div className="border border-[var(--border)] rounded-2xl p-6 bg-[var(--bg-alt)]">
                 <VideoUploader onAnalyze={handleAnalyze} isLoading={state === "loading"} />
                 {state === "error" && errorMsg && (
-                  <motion.p
+                  <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="mt-4 text-sm text-red-600 text-center"
+                    className="mt-4 space-y-3"
                   >
-                    {errorMsg}
-                  </motion.p>
+                    <p className="text-sm text-red-600 text-center leading-relaxed">{errorMsg}</p>
+                    <button
+                      onClick={() => setState("idle")}
+                      className="w-full py-2.5 rounded-xl border border-[var(--border)] text-sm font-medium text-[var(--fg)] hover:bg-[var(--bg-alt)] transition-colors"
+                    >
+                      Reintentar →
+                    </button>
+                  </motion.div>
                 )}
               </div>
 

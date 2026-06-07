@@ -2,8 +2,9 @@
 
 import { useCallback, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, Film, X, Loader2 } from "lucide-react";
+import { Upload, Film, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AnalysisLoader } from "@/components/AnalysisLoader";
 
 interface VideoUploaderProps {
   onAnalyze: (file: File) => void;
@@ -110,25 +111,21 @@ export function VideoUploader({ onAnalyze, isLoading }: VideoUploaderProps) {
 
       {error && <p className="text-sm text-red-600 text-center">{error}</p>}
 
-      {file && (
+      {file && !isLoading && (
         <motion.button
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           onClick={() => onAnalyze(file)}
-          disabled={isLoading}
-          className={cn(
-            "w-full py-3.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2",
-            isLoading
-              ? "bg-[var(--bg-alt)] text-[var(--fg-muted)] cursor-not-allowed border border-[var(--border)]"
-              : "bg-[var(--fg)] text-white hover:bg-[#1f1f1f] active:scale-[0.99]"
-          )}
+          className="w-full py-3.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 bg-[var(--fg)] text-white hover:bg-[#1f1f1f] active:scale-[0.99]"
         >
-          {isLoading ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /><span>Analizando activación neuronal...</span></>
-          ) : (
-            <><span>Analizar Viralidad</span><span>→</span></>
-          )}
+          <span>Analizar Viralidad</span><span>→</span>
         </motion.button>
+      )}
+
+      {isLoading && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <AnalysisLoader />
+        </motion.div>
       )}
     </div>
   );
