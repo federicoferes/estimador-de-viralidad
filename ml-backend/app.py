@@ -9,6 +9,8 @@ Space settings:
 """
 
 import os
+import sys
+import subprocess
 import json
 import tempfile
 import time
@@ -17,9 +19,24 @@ from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-# TribeV2 — installed by setup.sh into /tmp/tribev2
-import sys
-sys.path.insert(0, "/tmp/tribev2")
+# Install TribeV2 at startup (setup.sh doesn't run in Gradio SDK)
+_TRIBE_DIR = "/tmp/tribev2"
+if not Path(_TRIBE_DIR).exists():
+    print(">>> Downloading TribeV2...", flush=True)
+    from huggingface_hub import snapshot_download
+    snapshot_download(
+        repo_id="facebook/tribev2",
+        local_dir=_TRIBE_DIR,
+        token=os.environ.get("HF_TOKEN"),
+        ignore_patterns=["*.safetensors.index.json"],
+    )
+    print(">>> Installing TribeV2...", flush=True)
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-e", _TRIBE_DIR, "--no-deps", "-q"]
+    )
+    print(">>> TribeV2 ready.", flush=True)
+
+sys.path.insert(0, _TRIBE_DIR)
 from tribev2.demo_utils import TribeModel
 
 app = FastAPI(title="TribeV2 Virality API")

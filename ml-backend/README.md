@@ -4,9 +4,9 @@ emoji: 🧠
 colorFrom: purple
 colorTo: blue
 sdk: gradio
-sdk_version: "5"
+sdk_version: 5.29.0
 app_file: app.py
-startup_duration_timeout: 3600
+startup_duration_timeout: 1h
 pinned: false
 license: cc-by-nc-4.0
 ---
