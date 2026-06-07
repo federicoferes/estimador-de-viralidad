@@ -26,6 +26,21 @@ if _hf_token:
 
 from tribev2 import TribeModel
 
+# Patch out the uvx/whisperx transcription step — TribeV2 works without Word events
+# (language-responsive vertices will show baseline activation instead of driven response)
+try:
+    import tribev2.eventstransforms as _et
+    import pandas as _pd
+
+    def _skip_transcription(self, events: _pd.DataFrame) -> _pd.DataFrame:
+        print("[INFO] Skipping whisperx transcription (not available on HF Space)", flush=True)
+        return events
+
+    _et.ExtractWordsFromAudio._run = _skip_transcription
+    print(">>> Audio transcription patched (no uvx/whisperx needed).", flush=True)
+except Exception as _patch_err:
+    print(f">>> Could not patch ExtractWordsFromAudio: {_patch_err}", flush=True)
+
 _model: TribeModel | None = None
 
 
