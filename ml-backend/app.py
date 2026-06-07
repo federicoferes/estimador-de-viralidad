@@ -90,8 +90,8 @@ demo.app.add_middleware(
 )
 
 
-@demo.app.post("/predict")
-async def predict(video: UploadFile = File(...)):
+@demo.app.post("/analyze")
+async def analyze(video: UploadFile = File(...)):
     t0 = time.time()
     suffix = Path(video.filename or "video.mp4").suffix or ".mp4"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:

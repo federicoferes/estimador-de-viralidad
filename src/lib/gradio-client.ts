@@ -21,7 +21,7 @@ export async function analyzeVideo(
 
   let res: Response;
   try {
-    res = await fetch(`${SPACE_URL}/predict`, {
+    res = await fetch(`${SPACE_URL}/analyze`, {
       method: "POST",
       body: form,
       signal,
