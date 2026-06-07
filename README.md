@@ -1,3 +1,16 @@
+---
+title: Estimador de Viralidad - TribeV2
+emoji: 🧠
+colorFrom: purple
+colorTo: blue
+sdk: gradio
+sdk_version: 5.29.0
+app_file: ml-backend/app.py
+startup_duration_timeout: 1h
+pinned: false
+license: cc-by-nc-4.0
+---
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
