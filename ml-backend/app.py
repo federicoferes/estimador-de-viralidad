@@ -4,11 +4,54 @@ SDK: gradio  |  Hardware: T4-small
 """
 
 import os
+import shutil
+import subprocess
 import traceback
 import tempfile
 import time
 import numpy as np
 from pathlib import Path
+
+# TribeV2 processes EVERY frame (n_frames = duration × fps) through a vision model.
+# On a T4-small a full 2-min/30fps video = ~3600 forward passes = 10+ min.
+# For virality estimation the hook + first seconds are what matter, so we trim
+# and downsample with ffmpeg before analysis to keep it fast and bounded.
+MAX_ANALYSIS_SECONDS = 45
+TARGET_FPS = 15
+
+
+def _prepare_video(src_path: str) -> tuple[str, bool]:
+    """Trim to the first MAX_ANALYSIS_SECONDS and re-encode at TARGET_FPS.
+    Returns (path_to_use, is_temp). Falls back to the original on any failure."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        print("[WARN] ffmpeg not found — analyzing full video (slow)", flush=True)
+        return src_path, False
+
+    dst = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
+    cmd = [
+        ffmpeg, "-y", "-ss", "0", "-t", str(MAX_ANALYSIS_SECONDS),
+        "-i", src_path,
+        "-r", str(TARGET_FPS),
+        "-vf", "scale=-2:480",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "128k",
+        dst,
+    ]
+    print(f"[INFO] Preprocessing: trim to {MAX_ANALYSIS_SECONDS}s @ {TARGET_FPS}fps, 480p", flush=True)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if r.returncode != 0:
+            print(f"[WARN] ffmpeg failed, using original:\n{r.stderr[-400:]}", flush=True)
+            try: os.unlink(dst)
+            except OSError: pass
+            return src_path, False
+    except Exception as e:
+        print(f"[WARN] ffmpeg exception, using original: {e}", flush=True)
+        try: os.unlink(dst)
+        except OSError: pass
+        return src_path, False
+    return dst, True
 
 import gradio as gr
 from fastapi import File, UploadFile, HTTPException
@@ -66,8 +109,14 @@ def _score(preds: np.ndarray, lo: int, hi: int) -> float:
 
 def analyze_video(video_path: str) -> dict:
     model = get_model()
-    df = model.get_events_dataframe(video_path=video_path)
-    preds, _ = model.predict(events=df)   # (n_timesteps, n_vertices)
+    prepared, is_temp = _prepare_video(video_path)
+    try:
+        df = model.get_events_dataframe(video_path=prepared)
+        preds, _ = model.predict(events=df)   # (n_timesteps, n_vertices)
+    finally:
+        if is_temp:
+            try: os.unlink(prepared)
+            except OSError: pass
 
     n = preds.shape[1]
     q = n // 4

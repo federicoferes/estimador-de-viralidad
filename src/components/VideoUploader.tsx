@@ -12,7 +12,7 @@ interface VideoUploaderProps {
 }
 
 const ACCEPTED = ["video/mp4", "video/webm", "video/mov", "video/quicktime", "video/avi"];
-const MAX_MB = 200;
+const MAX_MB = 250;
 
 export function VideoUploader({ onAnalyze, isLoading }: VideoUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
