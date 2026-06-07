@@ -4,6 +4,7 @@ SDK: gradio  |  Hardware: T4-small
 """
 
 import os
+import traceback
 import tempfile
 import time
 import numpy as np
@@ -12,6 +13,16 @@ from pathlib import Path
 import gradio as gr
 from fastapi import File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
+# Authenticate with HF so gated models (TribeV2 + LLaMA) can be downloaded
+_hf_token = os.environ.get("HF_TOKEN")
+if _hf_token:
+    try:
+        from huggingface_hub import login
+        login(token=_hf_token, add_to_git_credential=False)
+        print(">>> HF authenticated.", flush=True)
+    except Exception as _e:
+        print(f">>> HF login warning: {_e}", flush=True)
 
 from tribev2 import TribeModel
 
@@ -26,7 +37,7 @@ def get_model() -> TribeModel:
             "facebook/tribev2",
             cache_folder="/tmp/tribev2_cache",
         )
-        print(">>> Ready.", flush=True)
+        print(">>> TribeV2 ready.", flush=True)
     return _model
 
 
@@ -55,21 +66,43 @@ def analyze_video(video_path: str) -> dict:
 
 # ── Gradio UI ──────────────────────────────────────────────────────────────
 
-def gradio_fn(video_path: str) -> dict:
-    scores = analyze_video(video_path)
-    overall = round(
-        0.35 * scores["reward"] * 100
-        + 0.25 * scores["visual"] * 100
-        + 0.20 * scores["audio"] * 100
-        + 0.20 * scores["language"] * 100
-    )
-    return {
-        "Viralidad Global": f"{overall}/100",
-        "Impacto Visual":        f"{round(scores['visual']*100)}/100",
-        "Enganche Auditivo":     f"{round(scores['audio']*100)}/100",
-        "Narrativa / Lenguaje":  f"{round(scores['language']*100)}/100",
-        "Recompensa Emocional":  f"{round(scores['reward']*100)}/100",
-    }
+def gradio_fn(video_input) -> dict:
+    try:
+        # Gradio 5 gr.Video preprocesses FileData to str, but guard defensively
+        if isinstance(video_input, dict):
+            video_path = str(video_input.get("path") or video_input.get("url") or "")
+        elif hasattr(video_input, "path"):
+            video_path = str(video_input.path)
+        else:
+            video_path = str(video_input) if video_input is not None else ""
+
+        if not video_path:
+            return {"error": "No se recibió ruta de video", "type": "ValueError"}
+
+        print(f"[INFO] Analyzing video: {video_path}", flush=True)
+        scores = analyze_video(video_path)
+        overall = round(
+            0.35 * scores["reward"] * 100
+            + 0.25 * scores["visual"] * 100
+            + 0.20 * scores["audio"] * 100
+            + 0.20 * scores["language"] * 100
+        )
+        print(f"[INFO] Done. overall={overall}", flush=True)
+        return {
+            "Viralidad Global":       f"{overall}/100",
+            "Impacto Visual":         f"{round(scores['visual']*100)}/100",
+            "Enganche Auditivo":      f"{round(scores['audio']*100)}/100",
+            "Narrativa / Lenguaje":   f"{round(scores['language']*100)}/100",
+            "Recompensa Emocional":   f"{round(scores['reward']*100)}/100",
+        }
+    except Exception as exc:
+        tb = traceback.format_exc()
+        print(f"[ERROR] gradio_fn failed:\n{tb}", flush=True)
+        return {
+            "error":    str(exc),
+            "type":     type(exc).__name__,
+            "details":  tb[-600:],
+        }
 
 
 demo = gr.Interface(
@@ -80,18 +113,18 @@ demo = gr.Interface(
     description="Subí un video y la IA predice su potencial viral analizando activación neuronal.",
 )
 
-# ── Custom FastAPI route on demo.app (called by Vercel) ───────────────────
+# ── Custom FastAPI route ────────────────────────────────────────────────────
 
 demo.app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["POST", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 @demo.app.post("/analyze")
-async def analyze(video: UploadFile = File(...)):
+async def analyze_endpoint(video: UploadFile = File(...)):
     t0 = time.time()
     suffix = Path(video.filename or "video.mp4").suffix or ".mp4"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -100,10 +133,17 @@ async def analyze(video: UploadFile = File(...)):
     try:
         scores = analyze_video(tmp_path)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        tb = traceback.format_exc()
+        print(f"[ERROR] /analyze failed:\n{tb}", flush=True)
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
     finally:
         os.unlink(tmp_path)
     return {**scores, "elapsed_ms": round((time.time() - t0) * 1000)}
+
+
+@demo.app.get("/health")
+async def health():
+    return {"status": "ok", "model_loaded": _model is not None}
 
 
 if __name__ == "__main__":
