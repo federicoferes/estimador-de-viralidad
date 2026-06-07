@@ -20,22 +20,22 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 # Install TribeV2 at startup (setup.sh doesn't run in Gradio SDK)
-# TribeV2 repo layout: /tmp/tribev2/tribev2/demo_utils.py
-# No setup.py — add the parent dir to sys.path directly.
-_TRIBE_PARENT = "/tmp/tribev2"
-_TRIBE_PKG    = os.path.join(_TRIBE_PARENT, "tribev2")
+# TribeV2 repo layout: the repo ROOT is the tribev2 package.
+# snapshot_download saves to /tmp/tribev2/ → demo_utils.py is at /tmp/tribev2/demo_utils.py
+# So we need /tmp in sys.path to import as `tribev2.demo_utils`.
+_TRIBE_DIR = "/tmp/tribev2"
 
-if not os.path.isdir(_TRIBE_PKG):
+if not os.path.isfile(os.path.join(_TRIBE_DIR, "demo_utils.py")):
     print(">>> Downloading TribeV2...", flush=True)
     from huggingface_hub import snapshot_download
     snapshot_download(
         repo_id="facebook/tribev2",
-        local_dir=_TRIBE_PARENT,
+        local_dir=_TRIBE_DIR,
         token=os.environ.get("HF_TOKEN"),
     )
     print(">>> TribeV2 downloaded.", flush=True)
 
-sys.path.insert(0, _TRIBE_PARENT)
+sys.path.insert(0, "/tmp")   # tribev2/ lives directly under /tmp
 from tribev2.demo_utils import TribeModel
 
 app = FastAPI(title="TribeV2 Virality API")
