@@ -67,8 +67,9 @@ def analyze_video(video_path: str) -> dict:
 # ── Gradio UI ──────────────────────────────────────────────────────────────
 
 def gradio_fn(video_input) -> dict:
+    print(f"[INFO] gradio_fn called. type={type(video_input).__name__} val={str(video_input)[:120]}", flush=True)
     try:
-        # Gradio 5 gr.Video preprocesses FileData to str, but guard defensively
+        # gr.File passes FileData dict; extract path
         if isinstance(video_input, dict):
             video_path = str(video_input.get("path") or video_input.get("url") or "")
         elif hasattr(video_input, "path"):
@@ -79,7 +80,7 @@ def gradio_fn(video_input) -> dict:
         if not video_path:
             return {"error": "No se recibió ruta de video", "type": "ValueError"}
 
-        print(f"[INFO] Analyzing video: {video_path}", flush=True)
+        print(f"[INFO] Analyzing: {video_path}", flush=True)
         scores = analyze_video(video_path)
         overall = round(
             0.35 * scores["reward"] * 100
@@ -95,11 +96,11 @@ def gradio_fn(video_input) -> dict:
             "Narrativa / Lenguaje":   f"{round(scores['language']*100)}/100",
             "Recompensa Emocional":   f"{round(scores['reward']*100)}/100",
         }
-    except Exception as exc:
+    except BaseException as exc:
         tb = traceback.format_exc()
-        print(f"[ERROR] gradio_fn failed:\n{tb}", flush=True)
+        print(f"[ERROR] gradio_fn caught {type(exc).__name__}:\n{tb}", flush=True)
         return {
-            "error":    str(exc),
+            "error":    str(exc) or f"<{type(exc).__name__}: sin mensaje>",
             "type":     type(exc).__name__,
             "details":  tb[-600:],
         }
@@ -107,7 +108,7 @@ def gradio_fn(video_input) -> dict:
 
 demo = gr.Interface(
     fn=gradio_fn,
-    inputs=gr.Video(label="Video a analizar"),
+    inputs=gr.File(label="Video a analizar", file_types=["video"]),
     outputs=gr.JSON(label="Potencial de Viralidad"),
     title="Estimador de Viralidad — TribeV2",
     description="Subí un video y la IA predice su potencial viral analizando activación neuronal.",
