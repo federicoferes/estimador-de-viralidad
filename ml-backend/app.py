@@ -112,9 +112,20 @@ def gradio_fn(video_input) -> dict:
         }
     except BaseException as exc:
         tb = traceback.format_exc()
-        print(f"[ERROR] {type(exc).__name__}: {exc}\n{tb}", flush=True)
+        # Walk the __cause__ / __context__ chain — transformers' lazy import masks
+        # the real ImportError behind a generic "Are this object's requirements..." msg
+        chain = []
+        cur: BaseException | None = exc
+        seen = set()
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            chain.append(f"{type(cur).__name__}: {cur}")
+            cur = cur.__cause__ or cur.__context__
+        root = chain[-1] if chain else str(exc)
+        print(f"[ERROR] chain:\n  " + "\n  → ".join(chain) + f"\n{tb}", flush=True)
         return {
             "error":   str(exc) or f"<{type(exc).__name__}>",
+            "root_cause": root,
             "type":    type(exc).__name__,
             "details": tb[-800:],
         }

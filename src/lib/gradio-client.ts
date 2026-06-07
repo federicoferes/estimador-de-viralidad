@@ -133,7 +133,10 @@ function mapGradioResult(
   elapsedMs: number
 ): ViralityResult {
   if (result.error) {
-    throw new Error(`Error en TribeV2: ${result.error}`);
+    const root = result.root_cause && result.root_cause !== result.error
+      ? ` (causa: ${result.root_cause})`
+      : "";
+    throw new Error(`Error en TribeV2: ${result.error}${root}`);
   }
 
   const parseScore = (val: unknown): number => {

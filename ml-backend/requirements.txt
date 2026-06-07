@@ -1,7 +1,7 @@
 tribev2 @ git+https://github.com/facebookresearch/tribev2.git
 exca==0.5.22
 neuralset==0.0.2
-transformers>=4.40.0
+transformers>=4.44,<5
 accelerate>=0.30.0
 fastapi>=0.115
 uvicorn[standard]>=0.30
