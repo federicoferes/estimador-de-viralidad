@@ -17,7 +17,9 @@ from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-# TribeV2 imports — installed via requirements.txt
+# TribeV2 — installed by setup.sh into /tmp/tribev2
+import sys
+sys.path.insert(0, "/tmp/tribev2")
 from tribev2.demo_utils import TribeModel
 
 app = FastAPI(title="TribeV2 Virality API")

@@ -6,6 +6,7 @@ colorTo: cyan
 sdk: gradio
 sdk_version: "5"
 app_file: app.py
+startup_duration_timeout: 3600
 pinned: false
 license: cc-by-nc-4.0
 ---
