@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { VideoUploader } from "@/components/VideoUploader";
 import { AnalysisResult } from "@/components/AnalysisResult";
+import { analyzeVideo } from "@/lib/gradio-client";
 import type { ViralityResult } from "@/types/analysis";
 
 type State = "idle" | "loading" | "result" | "error";
@@ -12,25 +13,33 @@ export default function Home() {
   const [state, setState] = useState<State>("idle");
   const [result, setResult] = useState<ViralityResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const handleAnalyze = async (file: File) => {
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+
     setState("loading");
     setErrorMsg(null);
     try {
-      const form = new FormData();
-      form.append("video", file);
-      const res = await fetch("/api/analyze", { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) { setState("error"); setErrorMsg(data.error ?? "Error desconocido."); return; }
+      const data = await analyzeVideo(file, abort.signal);
       setResult(data);
       setState("result");
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setState("error");
-      setErrorMsg("Error de red. Verificá tu conexión e intentá de nuevo.");
+      const msg = err instanceof Error ? err.message : "Error desconocido.";
+      setErrorMsg(msg);
     }
   };
 
-  const reset = () => { setState("idle"); setResult(null); setErrorMsg(null); };
+  const reset = () => {
+    abortRef.current?.abort();
+    setState("idle");
+    setResult(null);
+    setErrorMsg(null);
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
