@@ -7,7 +7,6 @@ export async function analyzeVideo(
   signal: AbortSignal
 ): Promise<ViralityResult> {
   const t0 = Date.now();
-  const sessionHash = Math.random().toString(36).slice(2, 10);
 
   // 1. Upload file to HF Space storage
   const uploadForm = new FormData();
@@ -38,14 +37,13 @@ export async function analyzeVideo(
     throw new Error("El Space no devolvió una ruta para el video subido.");
   }
 
-  // 2. Join the Gradio queue with FileData format
-  let joinRes: Response;
+  // 2. Call /gradio_api/call/predict (Gradio 5 async call API — no session_hash needed)
+  let callRes: Response;
   try {
-    joinRes = await fetch(`${SPACE_URL}/gradio_api/queue/join`, {
+    callRes = await fetch(`${SPACE_URL}/gradio_api/call/predict`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        fn_index: 0,
         data: [
           {
             path: serverPath,
@@ -55,38 +53,36 @@ export async function analyzeVideo(
             meta: { _type: "gradio.FileData" },
           },
         ],
-        session_hash: sessionHash,
       }),
       signal,
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;
-    throw new Error("Error al enviar el video a la cola de análisis.");
+    throw new Error("Error al enviar el video al Space para análisis.");
   }
 
-  if (!joinRes.ok) {
-    const text = await joinRes.text().catch(() => "");
-    throw new Error(`Error en la cola del Space (${joinRes.status}): ${text.slice(0, 200)}`);
+  if (!callRes.ok) {
+    const text = await callRes.text().catch(() => "");
+    throw new Error(`Error iniciando análisis (${callRes.status}): ${text.slice(0, 200)}`);
   }
 
-  const { event_id } = await joinRes.json();
+  const { event_id } = await callRes.json();
   if (!event_id) {
-    throw new Error("El Space no devolvió un event_id para el análisis.");
+    throw new Error("El Space no devolvió un event_id.");
   }
 
-  // 3. Stream SSE — session_hash required in URL for Gradio 5
-  const rawResult = await streamQueueResult(event_id, sessionHash, signal);
+  // 3. Stream SSE from /gradio_api/call/predict/{event_id}
+  const rawResult = await streamCallResult(event_id, signal);
 
   return mapGradioResult(rawResult, Date.now() - t0);
 }
 
-function streamQueueResult(
+function streamCallResult(
   eventId: string,
-  sessionHash: string,
   signal: AbortSignal
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const url = `${SPACE_URL}/gradio_api/queue/data?event_id=${encodeURIComponent(eventId)}&session_hash=${encodeURIComponent(sessionHash)}`;
+    const url = `${SPACE_URL}/gradio_api/call/predict/${encodeURIComponent(eventId)}`;
     const es = new EventSource(url);
 
     const done = (fn: () => void) => {
@@ -98,51 +94,32 @@ function streamQueueResult(
       done(() => reject(new DOMException("The operation was aborted.", "AbortError")));
     signal.addEventListener("abort", onAbort, { once: true });
 
-    es.onmessage = (evt) => {
-      let data: Record<string, unknown>;
+    es.addEventListener("error", (evt) => {
+      signal.removeEventListener("abort", onAbort);
+      const data = (evt as MessageEvent).data;
+      let msg = "Error en el Space durante el análisis.";
+      if (typeof data === "string") {
+        try { msg = JSON.parse(data) as string; } catch { msg = data.slice(0, 300); }
+      }
+      done(() => reject(new Error(msg)));
+    });
+
+    es.addEventListener("complete", (evt) => {
+      signal.removeEventListener("abort", onAbort);
+      let outputArr: unknown[];
       try {
-        data = JSON.parse(evt.data as string);
+        outputArr = JSON.parse((evt as MessageEvent).data);
       } catch {
+        done(() => reject(new Error("Respuesta inesperada del Space.")));
         return;
       }
-
-      const msg = data.msg as string;
-
-      if (msg === "queue_full") {
-        signal.removeEventListener("abort", onAbort);
-        done(() => reject(new Error("El Space está ocupado. Esperá un momento e intentá de nuevo.")));
+      const result = outputArr?.[0];
+      if (!result || typeof result !== "object") {
+        done(() => reject(new Error("El Space devolvió un resultado vacío.")));
         return;
       }
-
-      if (msg === "process_completed") {
-        signal.removeEventListener("abort", onAbort);
-
-        if (data.success === false) {
-          const errMsg = (data.output as Record<string, unknown>)?.error;
-          done(() =>
-            reject(
-              new Error(
-                typeof errMsg === "string" && errMsg
-                  ? `El análisis falló: ${errMsg}`
-                  : "El análisis falló en el Space. Revisá que el video sea válido."
-              )
-            )
-          );
-          return;
-        }
-
-        const output = data.output as Record<string, unknown> | undefined;
-        const outputData = output?.data as unknown[] | undefined;
-        const result = outputData?.[0];
-
-        if (!result || typeof result !== "object") {
-          done(() => reject(new Error("Respuesta inesperada del Space.")));
-          return;
-        }
-
-        done(() => resolve(result as Record<string, unknown>));
-      }
-    };
+      done(() => resolve(result as Record<string, unknown>));
+    });
 
     es.onerror = () => {
       signal.removeEventListener("abort", onAbort);
