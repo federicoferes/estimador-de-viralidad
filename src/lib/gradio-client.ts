@@ -1,7 +1,14 @@
-import { Client } from "@gradio/client";
 import type { ViralityResult } from "@/types/analysis";
 
-const SPACE = "fedeferes/estimador-de-viralidad";
+const SPACE_URL = "https://fedeferes-estimador-de-viralidad.hf.space";
+
+interface RawScores {
+  visual:    number;
+  audio:     number;
+  language:  number;
+  reward:    number;
+  elapsed_ms?: number;
+}
 
 export async function analyzeVideo(
   file: File,
@@ -9,36 +16,40 @@ export async function analyzeVideo(
 ): Promise<ViralityResult> {
   const t0 = Date.now();
 
-  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  const form = new FormData();
+  form.append("video", file, file.name);
 
-  const client = await Client.connect(SPACE);
-
-  if (signal.aborted) {
-    client.close();
-    throw new DOMException("Aborted", "AbortError");
+  let res: Response;
+  try {
+    res = await fetch(`${SPACE_URL}/predict`, {
+      method: "POST",
+      body: form,
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    throw new Error(
+      "No se pudo conectar al Space. " +
+      "Si es la primera vez en el día puede tardar hasta 3 min en iniciar. Reintentá."
+    );
   }
 
-  signal.addEventListener("abort", () => client.close(), { once: true });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const detail = JSON.parse(text || "{}").detail ?? text.slice(0, 200);
+    throw new Error(`Error del Space (${res.status}): ${detail}`);
+  }
 
-  // gr.Interface with gr.Video input → API endpoint is "/predict"
-  const result = await client.predict<unknown[]>("/predict", [file]);
-
-  const scores = result.data[0] as Record<string, string>;
+  const scores: RawScores = await res.json();
   return mapScores(scores, Date.now() - t0);
 }
 
-function mapScores(
-  scores: Record<string, string>,
-  elapsedMs: number
-): ViralityResult {
-  const parse = (key: string) => parseInt(scores[key] ?? "0") || 0;
-  const visual    = parse("Impacto Visual");
-  const audio     = parse("Enganche Auditivo");
-  const narrative = parse("Narrativa / Lenguaje");
-  const reward    = parse("Recompensa Emocional");
-  const overall   =
-    parse("Viralidad Global") ||
-    Math.round(0.35 * reward + 0.25 * visual + 0.20 * audio + 0.20 * narrative);
+function mapScores(s: RawScores, elapsedMs: number): ViralityResult {
+  const visual    = Math.round(s.visual    * 100);
+  const audio     = Math.round(s.audio     * 100);
+  const narrative = Math.round(s.language  * 100);
+  const reward    = Math.round(s.reward    * 100);
+  const overall   = Math.round(0.35 * reward + 0.25 * visual + 0.20 * audio + 0.20 * narrative);
 
   return {
     overall_score: overall,

@@ -29,7 +29,16 @@ export default function Home() {
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setState("error");
-      const msg = err instanceof Error ? err.message : "Error desconocido.";
+      let msg: string;
+      if (err instanceof Error) {
+        msg = err.message;
+      } else if (typeof err === "string") {
+        msg = err;
+      } else if (err && typeof err === "object") {
+        msg = JSON.stringify(err);
+      } else {
+        msg = String(err);
+      }
       setErrorMsg(msg);
     }
   };
