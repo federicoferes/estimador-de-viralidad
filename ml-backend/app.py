@@ -4,6 +4,11 @@ SDK: gradio  |  Hardware: T4-small
 """
 
 import os
+
+# Reduce CUDA memory fragmentation — helps avoid OOM on the 16GB T4 when the
+# big extractors (V-JEPA2 ViT-giant) allocate large activation buffers.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import shutil
 import subprocess
 import traceback
@@ -91,11 +96,19 @@ def get_model() -> TribeModel:
     global _model
     if _model is None:
         print(">>> Loading TribeV2...", flush=True)
+        # Shrink batch sizes to fit the T4-small's 16GB VRAM. V-JEPA2 ViT-giant
+        # with 64-frame clips at batch 8 OOMs; batch 1 trades speed for fitting.
+        config_update = {
+            "data.video_feature.image.batch_size": 1,  # vjepa2-vitg (the hog)
+            "data.image_feature.image.batch_size": 1,  # dinov2-large
+            "data.batch_size": 1,                       # brain encoder
+        }
         _model = TribeModel.from_pretrained(
             "facebook/tribev2",
             cache_folder="/tmp/tribev2_cache",
+            config_update=config_update,
         )
-        print(">>> TribeV2 ready.", flush=True)
+        print(">>> TribeV2 ready (batch_size=1, low-VRAM mode).", flush=True)
     return _model
 
 
