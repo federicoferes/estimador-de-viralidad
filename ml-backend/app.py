@@ -5,9 +5,17 @@ SDK: gradio  |  Hardware: T4-small
 
 import os
 
-# Reduce CUDA memory fragmentation — helps avoid OOM on the 16GB T4 when the
-# big extractors (V-JEPA2 ViT-giant) allocate large activation buffers.
+# Reduce CUDA memory fragmentation — helps avoid OOM when the big extractors
+# (V-JEPA2 ViT-giant) allocate large activation buffers.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+# Persist model weights on the Space's persistent storage (/data) when it's
+# attached, so the ~7GB of models survive sleep/wake instead of re-downloading
+# on every cold start. Falls back to /tmp (ephemeral) if no persistent disk.
+_PERSIST = "/data" if (os.path.isdir("/data") and os.access("/data", os.W_OK)) else "/tmp"
+os.environ.setdefault("HF_HOME", f"{_PERSIST}/hf_cache")
+_TRIBE_CACHE = f"{_PERSIST}/tribev2_cache"
+print(f">>> Model cache dir: {_PERSIST} ({'persistent' if _PERSIST == '/data' else 'EPHEMERAL — re-downloads on each wake'})", flush=True)
 
 import shutil
 import subprocess
@@ -89,27 +97,45 @@ try:
 except Exception as _patch_err:
     print(f">>> Could not patch ExtractWordsFromAudio: {_patch_err}", flush=True)
 
+import threading
+
 _model: TribeModel | None = None
+_model_lock = threading.Lock()
 
 
 def get_model() -> TribeModel:
     global _model
     if _model is None:
-        print(">>> Loading TribeV2...", flush=True)
-        # Batch sizes tuned for the L4's 24GB VRAM. Original config (vjepa2 b8)
-        # OOMs at 16GB; b4 fits comfortably at 24GB and is ~4x faster than b1.
-        config_update = {
-            "data.video_feature.image.batch_size": 4,  # vjepa2-vitg (the hog)
-            "data.image_feature.image.batch_size": 2,  # dinov2-large
-            "data.batch_size": 4,                       # brain encoder
-        }
-        _model = TribeModel.from_pretrained(
-            "facebook/tribev2",
-            cache_folder="/tmp/tribev2_cache",
-            config_update=config_update,
-        )
-        print(">>> TribeV2 ready (batch_size=4, L4 24GB).", flush=True)
+        with _model_lock:               # double-checked: safe for prewarm + request race
+            if _model is None:
+                print(">>> Loading TribeV2...", flush=True)
+                # Batch sizes tuned for the L4's 24GB VRAM. Original config
+                # (vjepa2 b8) OOMs at 16GB; b4 fits at 24GB and is ~4x faster than b1.
+                config_update = {
+                    "data.video_feature.image.batch_size": 4,  # vjepa2-vitg (the hog)
+                    "data.image_feature.image.batch_size": 2,  # dinov2-large
+                    "data.batch_size": 4,                       # brain encoder
+                }
+                _model = TribeModel.from_pretrained(
+                    "facebook/tribev2",
+                    cache_folder=_TRIBE_CACHE,
+                    config_update=config_update,
+                )
+                print(">>> TribeV2 ready (batch_size=4, L4 24GB).", flush=True)
     return _model
+
+
+def _prewarm():
+    """Load the model at startup so the first user request isn't a cold load."""
+    try:
+        get_model()
+        print(">>> Prewarm complete — model ready.", flush=True)
+    except Exception as e:
+        print(f"[WARN] Prewarm failed (will load on first request): {e}", flush=True)
+
+
+# Kick off model loading in the background as soon as the app boots.
+threading.Thread(target=_prewarm, daemon=True).start()
 
 
 def _score(preds: np.ndarray, lo: int, hi: int) -> float:
