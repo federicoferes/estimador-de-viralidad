@@ -125,19 +125,6 @@ def get_model() -> TribeModel:
     return _model
 
 
-def _prewarm():
-    """Load the model at startup so the first user request isn't a cold load."""
-    try:
-        get_model()
-        print(">>> Prewarm complete — model ready.", flush=True)
-    except Exception as e:
-        print(f"[WARN] Prewarm failed (will load on first request): {e}", flush=True)
-
-
-# Kick off model loading in the background as soon as the app boots.
-threading.Thread(target=_prewarm, daemon=True).start()
-
-
 def _score(preds: np.ndarray, lo: int, hi: int) -> float:
     region = preds[:, lo:hi]
     ceiling = float(np.percentile(preds, 95))
