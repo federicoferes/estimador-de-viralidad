@@ -120,16 +120,11 @@ def _score(preds: np.ndarray, lo: int, hi: int) -> float:
     return float(np.clip(np.mean(region) / ceiling, 0.0, 1.0))
 
 
-def analyze_video(video_path: str) -> dict:
+def analyze_prepared(prepared_path: str) -> dict:
+    """Run TribeV2 on an already-prepared (trimmed/downsampled) video."""
     model = get_model()
-    prepared, is_temp = _prepare_video(video_path)
-    try:
-        df = model.get_events_dataframe(video_path=prepared)
-        preds, _ = model.predict(events=df)   # (n_timesteps, n_vertices)
-    finally:
-        if is_temp:
-            try: os.unlink(prepared)
-            except OSError: pass
+    df = model.get_events_dataframe(video_path=prepared_path)
+    preds, _ = model.predict(events=df)   # (n_timesteps, n_vertices)
 
     n = preds.shape[1]
     q = n // 4
@@ -139,6 +134,56 @@ def analyze_video(video_path: str) -> dict:
         "language": _score(preds, 2*q, 3*q),
         "reward":   _score(preds, 3*q, n),
     }
+
+
+def analyze_video(video_path: str) -> dict:
+    """Prepare + analyze. Kept for the standalone /analyze FastAPI endpoint."""
+    prepared, is_temp = _prepare_video(video_path)
+    try:
+        return analyze_prepared(prepared)
+    finally:
+        if is_temp:
+            try: os.unlink(prepared)
+            except OSError: pass
+
+
+# ── Whisper transcription (for the LLM viral-script generator) ───────────────
+
+_whisper = None
+
+
+def get_whisper():
+    """Lazy-load faster-whisper. Prefers GPU; falls back to a small CPU model."""
+    global _whisper
+    if _whisper is None:
+        from faster_whisper import WhisperModel
+        import torch
+        if torch.cuda.is_available():
+            try:
+                print(">>> Loading Whisper large-v3 (cuda/float16)...", flush=True)
+                _whisper = WhisperModel("large-v3", device="cuda", compute_type="float16")
+            except Exception as e:
+                print(f"[WARN] Whisper cuda load failed ({e}); falling back to CPU.", flush=True)
+                _whisper = WhisperModel("small", device="cpu", compute_type="int8")
+        else:
+            print(">>> Loading Whisper small (cpu/int8)...", flush=True)
+            _whisper = WhisperModel("small", device="cpu", compute_type="int8")
+        print(">>> Whisper ready.", flush=True)
+    return _whisper
+
+
+def transcribe_audio(media_path: str) -> str:
+    """Transcribe speech from a media file. Best-effort: returns '' on failure
+    so a transcription error never blocks the virality scores."""
+    try:
+        model = get_whisper()
+        segments, info = model.transcribe(media_path, beam_size=1, vad_filter=True)
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        print(f"[INFO] Transcript: lang={getattr(info,'language','?')}, {len(text)} chars", flush=True)
+        return text
+    except Exception as e:
+        print(f"[WARN] Transcription failed: {e}", flush=True)
+        return ""
 
 
 # ── Gradio UI ──────────────────────────────────────────────────────────────
@@ -157,7 +202,16 @@ def gradio_fn(video_input) -> dict:
             return {"error": "No se recibió ruta de video", "type": "ValueError"}
 
         print(f"[INFO] Analyzing: {video_path}", flush=True)
-        scores = analyze_video(video_path)
+        # Prepare once, reuse for both scoring and transcription.
+        prepared, is_temp = _prepare_video(video_path)
+        try:
+            scores = analyze_prepared(prepared)
+            transcript = transcribe_audio(prepared)  # best-effort, '' on failure
+        finally:
+            if is_temp:
+                try: os.unlink(prepared)
+                except OSError: pass
+
         overall = round(
             0.35 * scores["reward"] * 100
             + 0.25 * scores["visual"] * 100
@@ -171,6 +225,7 @@ def gradio_fn(video_input) -> dict:
             "Enganche Auditivo":      f"{round(scores['audio']*100)}/100",
             "Narrativa / Lenguaje":   f"{round(scores['language']*100)}/100",
             "Recompensa Emocional":   f"{round(scores['reward']*100)}/100",
+            "transcript":             transcript,
         }
     except BaseException as exc:
         tb = traceback.format_exc()

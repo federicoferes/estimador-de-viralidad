@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { ViralityMeter } from "./ViralityMeter";
 import { BrainBreakdown } from "./BrainBreakdown";
+import { ScriptGenerator } from "./ScriptGenerator";
 import type { ViralityResult } from "@/types/analysis";
 
 export function AnalysisResult({ result, onReset }: { result: ViralityResult; onReset: () => void }) {
@@ -40,6 +41,8 @@ export function AnalysisResult({ result, onReset }: { result: ViralityResult; on
         </p>
         <BrainBreakdown dimensions={result.dimensions} />
       </motion.div>
+
+      <ScriptGenerator result={result} />
 
       <div className="flex items-center justify-between pt-2 border-t border-[var(--border)]">
         <span className="text-xs text-[var(--fg-muted)]">

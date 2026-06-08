@@ -153,6 +153,9 @@ function mapGradioResult(
   const audio     = parseScore(result["Enganche Auditivo"]);
   const narrative = parseScore(result["Narrativa / Lenguaje"]);
   const reward    = parseScore(result["Recompensa Emocional"]);
+  const transcript = typeof result["transcript"] === "string"
+    ? (result["transcript"] as string)
+    : undefined;
 
   return {
     overall_score: overall,
@@ -165,6 +168,7 @@ function mapGradioResult(
     verdict:        getVerdict(overall),
     recommendation: getRecommendation({ visual, audio, narrative, reward }),
     processing_time_ms: elapsedMs,
+    transcript,
   };
 }
 
