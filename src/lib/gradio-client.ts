@@ -8,6 +8,19 @@ export async function analyzeVideo(
 ): Promise<ViralityResult> {
   const t0 = Date.now();
 
+  // 0. Get the Space access secret (login-gated Vercel route). Without it the
+  //    Space rejects the analysis, so anonymous direct hits can't burn GPU/Groq.
+  let spaceSecret = "";
+  try {
+    const secretRes = await fetch("/api/space-secret", { signal });
+    if (secretRes.ok) {
+      const j = await secretRes.json();
+      spaceSecret = typeof j?.secret === "string" ? j.secret : "";
+    }
+  } catch {
+    /* non-fatal: if it fails the Space will reject and we surface that error */
+  }
+
   // 1. Upload file to HF Space storage
   const uploadForm = new FormData();
   uploadForm.append("files", file, file.name);
@@ -52,6 +65,7 @@ export async function analyzeVideo(
             mime_type: file.type || "video/mp4",
             meta: { _type: "gradio.FileData" },
           },
+          spaceSecret,
         ],
       }),
       signal,

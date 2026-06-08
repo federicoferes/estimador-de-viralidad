@@ -63,7 +63,7 @@ def _prepare_video(src_path: str) -> tuple[str, bool]:
     return dst, True
 
 import gradio as gr
-from fastapi import File, UploadFile, HTTPException
+from fastapi import File, UploadFile, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 
 # Authenticate with HF so gated models (TribeV2 + LLaMA) can be downloaded
@@ -210,9 +210,25 @@ def transcribe_audio(media_path: str) -> str:
         except OSError: pass
 
 
+# ── Access control ───────────────────────────────────────────────────────────
+# The Space is public (EventSource can't send auth headers, so a private Space
+# would break the SSE result stream). Instead we gate the expensive work with a
+# shared secret: the frontend only gets it after the Vercel login. Without it,
+# the function rejects before any GPU/Groq work happens.
+
+def _check_secret(secret: str) -> bool:
+    expected = os.environ.get("SPACE_SECRET")
+    if not expected:
+        return True  # no secret configured → open (avoids locking ourselves out)
+    return secret == expected
+
+
 # ── Gradio UI ──────────────────────────────────────────────────────────────
 
-def gradio_fn(video_input) -> dict:
+def gradio_fn(video_input, secret: str = "") -> dict:
+    if not _check_secret(secret):
+        print("[WARN] Rejected request: invalid/missing access secret.", flush=True)
+        return {"error": "No autorizado. Acceso restringido.", "type": "Unauthorized"}
     print(f"[INFO] gradio_fn called. type={type(video_input).__name__}", flush=True)
     try:
         if isinstance(video_input, dict):
@@ -274,7 +290,10 @@ def gradio_fn(video_input) -> dict:
 
 demo = gr.Interface(
     fn=gradio_fn,
-    inputs=gr.File(label="Video a analizar", file_types=["video"]),
+    inputs=[
+        gr.File(label="Video a analizar", file_types=["video"]),
+        gr.Textbox(label="Clave de acceso", type="password"),
+    ],
     outputs=gr.JSON(label="Potencial de Viralidad"),
     title="Estimador de Viralidad — TribeV2",
     description="Subí un video y la IA predice su potencial viral analizando activación neuronal.",
@@ -291,7 +310,9 @@ demo.app.add_middleware(
 
 
 @demo.app.post("/analyze")
-async def analyze_endpoint(video: UploadFile = File(...)):
+async def analyze_endpoint(video: UploadFile = File(...), x_space_secret: str = Header(default="")):
+    if not _check_secret(x_space_secret):
+        raise HTTPException(status_code=401, detail="No autorizado")
     t0 = time.time()
     suffix = Path(video.filename or "video.mp4").suffix or ".mp4"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
