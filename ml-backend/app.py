@@ -147,43 +147,58 @@ def analyze_video(video_path: str) -> dict:
             except OSError: pass
 
 
-# ── Whisper transcription (for the LLM viral-script generator) ───────────────
+# ── Transcription via Groq (for the LLM viral-script generator) ──────────────
+# We transcribe with Groq's hosted Whisper instead of a local model: it keeps
+# the GPU free for TribeV2 (avoids VRAM/OOM contention), needs no 3GB download,
+# and is far faster. Requires the GROQ_API_KEY secret set on the Space.
 
-_whisper = None
-
-
-def get_whisper():
-    """Lazy-load faster-whisper. Prefers GPU; falls back to a small CPU model."""
-    global _whisper
-    if _whisper is None:
-        from faster_whisper import WhisperModel
-        import torch
-        if torch.cuda.is_available():
-            try:
-                print(">>> Loading Whisper large-v3 (cuda/float16)...", flush=True)
-                _whisper = WhisperModel("large-v3", device="cuda", compute_type="float16")
-            except Exception as e:
-                print(f"[WARN] Whisper cuda load failed ({e}); falling back to CPU.", flush=True)
-                _whisper = WhisperModel("small", device="cpu", compute_type="int8")
-        else:
-            print(">>> Loading Whisper small (cpu/int8)...", flush=True)
-            _whisper = WhisperModel("small", device="cpu", compute_type="int8")
-        print(">>> Whisper ready.", flush=True)
-    return _whisper
+GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODEL = "whisper-large-v3-turbo"
 
 
 def transcribe_audio(media_path: str) -> str:
-    """Transcribe speech from a media file. Best-effort: returns '' on failure
-    so a transcription error never blocks the virality scores."""
+    """Extract audio and transcribe it via Groq. Best-effort: returns '' on any
+    failure so a transcription problem never blocks the virality scores."""
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if not groq_key:
+        print("[WARN] GROQ_API_KEY not set — skipping transcription.", flush=True)
+        return ""
+
+    # Extract a small mono 16kHz mp3 (what Whisper expects) to keep the upload tiny.
+    ffmpeg = shutil.which("ffmpeg")
+    audio_path = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False).name
     try:
-        model = get_whisper()
-        segments, info = model.transcribe(media_path, beam_size=1, vad_filter=True)
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        print(f"[INFO] Transcript: lang={getattr(info,'language','?')}, {len(text)} chars", flush=True)
+        if ffmpeg:
+            r = subprocess.run(
+                [ffmpeg, "-y", "-i", media_path, "-vn",
+                 "-ac", "1", "-ar", "16000", "-b:a", "64k", audio_path],
+                capture_output=True, text=True, timeout=120,
+            )
+            upload_path = audio_path if r.returncode == 0 else media_path
+        else:
+            upload_path = media_path
+
+        import httpx
+        with open(upload_path, "rb") as f:
+            resp = httpx.post(
+                GROQ_TRANSCRIBE_URL,
+                headers={"Authorization": f"Bearer {groq_key}"},
+                files={"file": (os.path.basename(upload_path), f, "audio/mpeg")},
+                data={"model": GROQ_MODEL, "response_format": "json"},
+                timeout=120,
+            )
+        if resp.status_code != 200:
+            print(f"[WARN] Groq transcription failed ({resp.status_code}): {resp.text[:300]}", flush=True)
+            return ""
+        text = (resp.json().get("text") or "").strip()
+        print(f"[INFO] Transcript via Groq: {len(text)} chars", flush=True)
         return text
     except Exception as e:
         print(f"[WARN] Transcription failed: {e}", flush=True)
         return ""
+    finally:
+        try: os.unlink(audio_path)
+        except OSError: pass
 
 
 # ── Gradio UI ──────────────────────────────────────────────────────────────
