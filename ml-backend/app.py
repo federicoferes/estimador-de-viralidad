@@ -9,13 +9,9 @@ import os
 # (V-JEPA2 ViT-giant) allocate large activation buffers.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-# Persist model weights on the Space's persistent storage (/data) when it's
-# attached, so the ~7GB of models survive sleep/wake instead of re-downloading
-# on every cold start. Falls back to /tmp (ephemeral) if no persistent disk.
-_PERSIST = "/data" if (os.path.isdir("/data") and os.access("/data", os.W_OK)) else "/tmp"
-os.environ.setdefault("HF_HOME", f"{_PERSIST}/hf_cache")
-_TRIBE_CACHE = f"{_PERSIST}/tribev2_cache"
-print(f">>> Model cache dir: {_PERSIST} ({'persistent' if _PERSIST == '/data' else 'EPHEMERAL — re-downloads on each wake'})", flush=True)
+# Model cache on ephemeral /tmp (re-downloads on cold start, but stable).
+# Persistent-storage caching was removed — a stale /data mount could hang startup.
+_TRIBE_CACHE = "/tmp/tribev2_cache"
 
 import shutil
 import subprocess
