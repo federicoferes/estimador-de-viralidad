@@ -2,11 +2,37 @@ import type { ViralityResult } from "@/types/analysis";
 
 const SPACE_URL = "https://fedeferes-estimador-de-viralidad.hf.space";
 
+const SPACE_STARTING_MSG =
+  "El Space está despertando (la primera vez tarda 2-5 min en cargar el modelo). Esperá un momento y dale Reintentar.";
+
+// When the Space is asleep/booting, HF serves an HTML status page (200) instead
+// of JSON. Poll /config until it answers real JSON before uploading, so we never
+// try to parse HTML (the "Unexpected token '<'" crash).
+async function waitForSpaceReady(signal: AbortSignal, maxMs = 240_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      const res = await fetch(`${SPACE_URL}/config`, { signal, cache: "no-store" });
+      if (res.ok) {
+        const text = await res.text();
+        if (text.trim().startsWith("{")) return; // real JSON config → Space is up
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") throw err;
+    }
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+  throw new Error(SPACE_STARTING_MSG);
+}
+
 export async function analyzeVideo(
   file: File,
   signal: AbortSignal
 ): Promise<ViralityResult> {
   const t0 = Date.now();
+
+  // Make sure the Space is awake before we upload — avoids parsing HTML as JSON.
+  await waitForSpaceReady(signal);
 
   // 0. Get the Space access secret (login-gated Vercel route). Without it the
   //    Space rejects the analysis, so anonymous direct hits can't burn GPU/Groq.
@@ -44,7 +70,13 @@ export async function analyzeVideo(
     throw new Error(`Error al subir el video (${uploadRes.status}): ${text.slice(0, 200)}`);
   }
 
-  const uploadedPaths: string[] = await uploadRes.json();
+  const uploadText = await uploadRes.text();
+  let uploadedPaths: string[];
+  try {
+    uploadedPaths = JSON.parse(uploadText);
+  } catch {
+    throw new Error(SPACE_STARTING_MSG); // got HTML → Space still booting
+  }
   const serverPath = uploadedPaths?.[0];
   if (!serverPath) {
     throw new Error("El Space no devolvió una ruta para el video subido.");
@@ -80,7 +112,13 @@ export async function analyzeVideo(
     throw new Error(`Error iniciando análisis (${callRes.status}): ${text.slice(0, 200)}`);
   }
 
-  const { event_id } = await callRes.json();
+  const callText = await callRes.text();
+  let event_id: string | undefined;
+  try {
+    event_id = JSON.parse(callText)?.event_id;
+  } catch {
+    throw new Error(SPACE_STARTING_MSG);
+  }
   if (!event_id) {
     throw new Error("El Space no devolvió un event_id.");
   }
