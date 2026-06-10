@@ -20,5 +20,5 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Run on everything except static assets and the public auth routes.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|login|api/login).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|login|api/auth).*)"],
 };
